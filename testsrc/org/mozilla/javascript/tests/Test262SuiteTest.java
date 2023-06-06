@@ -85,8 +85,8 @@ public class Test262SuiteTest {
     static final Set<String> UNSUPPORTED_FEATURES =
             new HashSet<>(
                     Arrays.asList(
-                            "Array.prototype.flatMap",
-                            "Array.prototype.flat",
+                            //"Array.prototype.flatMap",
+                            // "Array.prototype.flat",
                             "Atomics",
                             "IsHTMLDDA",
                             "Proxy",
@@ -122,7 +122,7 @@ public class Test262SuiteTest {
     static {
         String propFile = System.getProperty("test262properties");
         testProperties =
-                propFile != null && !propFile.equals("") ? propFile : "testsrc/test262.properties";
+                propFile != null && !propFile.equals("") ? propFile : "testsrc/test262_custom.properties";
 
         String updateProps = System.getProperty("updateTest262properties");
 

@@ -9,16 +9,8 @@ package org.mozilla.javascript;
 import static org.mozilla.javascript.ScriptRuntimeES6.requireObjectCoercible;
 
 import java.io.Serializable;
-import java.util.AbstractList;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Comparator;
-import java.util.ConcurrentModificationException;
-import java.util.Iterator;
-import java.util.List;
-import java.util.ListIterator;
-import java.util.NoSuchElementException;
+import java.util.*;
+
 import org.mozilla.javascript.regexp.NativeRegExp;
 import org.mozilla.javascript.xml.XMLObject;
 
@@ -146,6 +138,9 @@ public class NativeArray extends IdScriptableObject implements List {
         addIdFunctionProperty(ctor, ARRAY_TAG, ConstructorId_filter, "filter", 1);
         addIdFunctionProperty(ctor, ARRAY_TAG, ConstructorId_forEach, "forEach", 1);
         addIdFunctionProperty(ctor, ARRAY_TAG, ConstructorId_map, "map", 1);
+        addIdFunctionProperty(ctor, ARRAY_TAG, ConstructorId_flat, "flat", 1);
+        addIdFunctionProperty(ctor, ARRAY_TAG, ConstructorId_flatMap, "flatMap", 1);
+
         addIdFunctionProperty(ctor, ARRAY_TAG, ConstructorId_some, "some", 1);
         addIdFunctionProperty(ctor, ARRAY_TAG, ConstructorId_find, "find", 1);
         addIdFunctionProperty(ctor, ARRAY_TAG, ConstructorId_findIndex, "findIndex", 1);
@@ -247,6 +242,14 @@ public class NativeArray extends IdScriptableObject implements List {
                 arity = 1;
                 s = "map";
                 break;
+            case Id_flat:
+                arity = 0;
+                s = "flat";
+                break;
+            case Id_flatMap:
+                arity = 1;
+                s = "flatMap";
+                break;
             case Id_some:
                 arity = 1;
                 s = "some";
@@ -324,6 +327,8 @@ public class NativeArray extends IdScriptableObject implements List {
                 case ConstructorId_filter:
                 case ConstructorId_forEach:
                 case ConstructorId_map:
+                case ConstructorId_flat:
+                case ConstructorId_flatMap:
                 case ConstructorId_some:
                 case ConstructorId_find:
                 case ConstructorId_findIndex:
@@ -427,6 +432,7 @@ public class NativeArray extends IdScriptableObject implements List {
                 case Id_copyWithin:
                     return js_copyWithin(cx, scope, thisObj, args);
 
+
                 case Id_every:
                 case Id_filter:
                 case Id_forEach:
@@ -434,10 +440,14 @@ public class NativeArray extends IdScriptableObject implements List {
                 case Id_some:
                 case Id_find:
                 case Id_findIndex:
+                case Id_flatMap:
                     return iterativeMethod(cx, f, scope, thisObj, args);
                 case Id_reduce:
                 case Id_reduceRight:
                     return reduceMethod(cx, id, scope, thisObj, args);
+
+                case Id_flat:
+                    return flatten(cx, id, scope, thisObj, args);
 
                 case Id_keys:
                     thisObj = ScriptRuntime.toObject(cx, scope, thisObj);
@@ -2013,8 +2023,8 @@ public class NativeArray extends IdScriptableObject implements List {
         }
 
         Scriptable array = null;
-        if (id == Id_filter || id == Id_map) {
-            int resultLength = id == Id_map ? (int) length : 0;
+        if (id == Id_filter || id == Id_map || id == Id_flatMap) {
+            int resultLength = (id == Id_map || id == Id_flatMap) ? (int) length : 0;
             array = cx.newArray(scope, resultLength);
         }
         long j = 0;
@@ -2042,6 +2052,7 @@ public class NativeArray extends IdScriptableObject implements List {
                 case Id_forEach:
                     break;
                 case Id_map:
+                case Id_flatMap:
                     defineElem(cx, array, i, result);
                     break;
                 case Id_some:
@@ -2061,6 +2072,8 @@ public class NativeArray extends IdScriptableObject implements List {
             case Id_filter:
             case Id_map:
                 return array;
+            case Id_flatMap:
+                return flatten(cx, id, scope, array, new Object[] { 1 });
             case Id_some:
                 return Boolean.FALSE;
             case Id_findIndex:
@@ -2068,6 +2081,66 @@ public class NativeArray extends IdScriptableObject implements List {
             case Id_forEach:
             default:
                 return Undefined.instance;
+        }
+    }
+
+    private static Object flatten(Context cx, int id, Scriptable scope, Scriptable thisObj, Object[] args) {
+        Scriptable thisArrayScriptable = ScriptRuntime.toObject(cx, scope, thisObj);
+        Object depthArg = args.length > 0 ? args[0] : null;
+
+        long length = getLengthProperty(cx, thisArrayScriptable);
+
+        if (length == 0) return cx.newArray(scope, 0);
+
+        double depth;
+
+        if (depthArg == null) {
+            depth = 1;
+        } else if (!ScriptRuntime.isNaN(depthArg)){
+            depth = ScriptRuntime.toInteger(depthArg);
+        } else {
+            depth = 0;
+        }
+
+        if (depth < 1) depth = 0;
+
+        if (depth == 0) {
+            return thisArrayScriptable;
+        } else {
+            NativeArrayIterator iterator = new NativeArrayIterator(scope, thisObj, NativeArrayIterator.ARRAY_ITERATOR_TYPE.VALUES);
+            List<Object> target = new ArrayList<Object>((int) length);
+
+            flatIterativeNew(cx, scope, iterator, target, depth);
+            return cx.newArray(scope, target.toArray());
+        }
+    }
+
+    private static boolean flatIteratorHasNextNew(ES6Iterator current, Context cx, Scriptable scope) {
+        return Objects.nonNull(current) && !current.isDone(cx, scope);
+    }
+
+    private static void flatIterativeNew(Context cx, Scriptable scope, ES6Iterator source, List<Object> target, double maxDepth) {
+        Deque<ES6Iterator> stack = new LinkedList<>();
+        stack.push(source);
+
+        ES6Iterator current = null;
+        while (flatIteratorHasNextNew(current, cx, scope) || (!stack.isEmpty() && flatIteratorHasNextNew(current = stack.pop(), cx, scope))) {
+            Object element = current.nextValue(cx, scope);
+
+            if (stack.size() < maxDepth &&
+                    Objects.nonNull(element) &&
+                    element instanceof Scriptable &&
+                    !(element instanceof NativeString) &&
+                    getLengthProperty(cx, (Scriptable)element) > 0) {
+                Scriptable e = (Scriptable)element;
+                stack.push(current);
+                stack.push(new NativeArrayIterator(scope, e, NativeArrayIterator.ARRAY_ITERATOR_TYPE.VALUES));
+                current = null;
+            } else {
+                if (!(element instanceof Scriptable && !(element instanceof NativeString) && ((Scriptable)element).has("length", (Scriptable)element))) {
+                    target.add(element);
+                }
+            }
         }
     }
 
@@ -2508,6 +2581,12 @@ public class NativeArray extends IdScriptableObject implements List {
             case "map":
                 id = Id_map;
                 break;
+            case "flat":
+                id = Id_flat;
+                break;
+            case "flatMap":
+                id = Id_flatMap;
+                break;
             case "some":
                 id = Id_some;
                 break;
@@ -2579,7 +2658,9 @@ public class NativeArray extends IdScriptableObject implements List {
             Id_entries = 29,
             Id_includes = 30,
             Id_copyWithin = 31,
-            SymbolId_iterator = 32,
+            Id_flat = 32,
+            Id_flatMap = 33,
+            SymbolId_iterator = 34,
             MAX_PROTOTYPE_ID = SymbolId_iterator;
     private static final int ConstructorId_join = -Id_join,
             ConstructorId_reverse = -Id_reverse,
@@ -2597,6 +2678,8 @@ public class NativeArray extends IdScriptableObject implements List {
             ConstructorId_filter = -Id_filter,
             ConstructorId_forEach = -Id_forEach,
             ConstructorId_map = -Id_map,
+            ConstructorId_flat = -Id_flat,
+            ConstructorId_flatMap = -Id_flatMap,
             ConstructorId_some = -Id_some,
             ConstructorId_find = -Id_find,
             ConstructorId_findIndex = -Id_findIndex,
